@@ -239,6 +239,16 @@ Some fields may not be returned by the device. Missing capabilities are therefor
 
 ---
 
+## 🔀 Multi-Appliance Support (fridges & other devices)
+
+The Vestel Smart Life cloud serves every appliance type through the same endpoints. As of v1.1.0, the integration no longer assumes your account only contains air conditioners:
+
+- AC entities (climate, louver, turbo/sleep/ionizer/eco switches, auto-off timer) are created **only** for air conditioners.
+- Other appliances (e.g. Vestel fridges) appear as a normal device with **raw diagnostic sensors** for every field the cloud returns - ideal for feature discovery.
+- One failing or unsupported appliance no longer breaks the whole integration (previously a fridge on the account caused a `KeyError: 'ACGENSI'` setup failure).
+
+Fridge / other-appliance *controls* are not implemented yet - their command fields are undocumented. Use the **Feature Discovery** workflow below to decode them; anything you find is welcome as a PR.
+
 ## 🧪 Raw API Services
 
 For advanced testing and feature discovery, the integration provides raw API services.
@@ -534,6 +544,16 @@ APK içerisinde aşağıdaki alanlar tespit edilmiştir. Kullanılabilirlik klim
 Bazı cihazlarda bu alanlar hiç bulunmayabilir. Bu durumda ilgili özelliklerin kullanılamaması normaldir.
 
 ---
+
+## 🔀 Çoklu Cihaz Desteği (buzdolabı ve diğer cihazlar)
+
+Vestel Akıllı Yaşam bulutu, tüm cihaz tiplerine aynı uç noktalar üzerinden hizmet verir. v1.1.0 itibarıyla entegrasyon, hesabınızda sadece klima olduğunu varsaymıyor:
+
+- Klima varlıkları (iklim, kanatçık, turbo/uyku/iyonizer/tasarruf anahtarları, otomatik kapatma) **yalnızca klimalar** için oluşturulur.
+- Diğer cihazlar (ör. Vestel buzdolabı), bulutun döndürdüğü her alan için **ham tanı sensörleriyle** birlikte normal bir cihaz olarak görünür - özellik keşfi için idealdir.
+- Tek bir cihazın hatası veya desteklenmemesi artık tüm entegrasyonu bozmaz (daha önce hesapta buzdolabı olması `KeyError: 'ACGENSI'` kurulum hatasına yol açıyordu).
+
+Buzdolabı ve diğer cihazlar için *kontroller* henüz uygulanmadı - komut alanları dokümante değil. Çözmek için aşağıdaki **Yeni Özellik Keşfetme** iş akışını kullanın; bulduklarınız PR olarak memnuniyetle karşılanır.
 
 ## 🧪 Ham API Servisleri
 

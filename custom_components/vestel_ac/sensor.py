@@ -89,72 +89,78 @@ async def async_setup_entry(
 
     for device in devices:
         device_id = device["device_id"]
+        status = coordinator.data.get(device_id, {})
+        is_ac = status.get("is_ac", False)
 
-        # Core diagnostic/air-quality sensors.
-        entities.extend(
-            [
-                _VestelKnownSensor(coordinator, entry.entry_id, device, "ACROOTE",
-                                   "Klima Oda Sıcaklığı", "°C", "room_temp"),
-                _VestelKnownSensor(coordinator, entry.entry_id, device, "ACPOLPM",
-                                   "PM2.5 Hava Kalitesi", None, "pm_quality"),
-                _VestelKnownSensor(coordinator, entry.entry_id, device, "ACPOLVC",
-                                   "VOC Hava Kalitesi", None, "voc_quality"),
-                _VestelKnownSensor(coordinator, entry.entry_id, device, "ACOAFLP",
-                                   "Koku/Alerjen Filtre Ömrü", PERCENTAGE, "odor_filter"),
-                _VestelKnownSensor(coordinator, entry.entry_id, device, "ACPSCLP",
-                                   "Partikül Sensörü Temizleme Ömrü", PERCENTAGE, "particle_filter"),
-                _VestelKnownSensor(coordinator, entry.entry_id, device, "ACERROR",
-                                   "Klima Hata Kodu", None, "ac_error"),
-                _VestelKnownSensor(coordinator, entry.entry_id, device, "ACERRTW",
-                                   "Klima İkinci Hata Kodu", None, "ac_error2"),
-                _VestelKnownSensor(coordinator, entry.entry_id, device, "ACWARNG",
-                                   "Klima Uyarı Kodu", None, "warning"),
-                _VestelKnownSensor(coordinator, entry.entry_id, device, "CONNRSS",
-                                   "Bağlantı RSSI", "dBm", "conn_rssi"),
-                _VestelKnownSensor(coordinator, entry.entry_id, device, "WIFIRSS",
-                                   "Wi-Fi RSSI", None, "wifi_rssi"),
-                _VestelKnownSensor(coordinator, entry.entry_id, device, "ACVERSI",
-                                   "Klima Yazılım Versiyonu", None, "version"),
-            ]
-        )
-
-        # Numeric PM2.5 / TVOC: unavailable if this particular model/API
-        # does not publish a numeric field. ACPOLPM/ACPOLVC remain quality
-        # classification sensors above.
-        entities.append(
-            _VestelAliasSensor(
-                coordinator, entry.entry_id, device,
-                "pm25", "PM2.5", PM25_KEYS, "µg/m³",
+        # AC-specific known sensors: the fields and names below only make
+        # sense for air conditioners. Other appliance types (e.g. fridges)
+        # are covered by the raw sensors at the bottom of this loop.
+        if is_ac:
+            entities.extend(
+                [
+                    _VestelKnownSensor(coordinator, entry.entry_id, device, "ACROOTE",
+                                       "Klima Oda Sıcaklığı", "°C", "room_temp"),
+                    _VestelKnownSensor(coordinator, entry.entry_id, device, "ACPOLPM",
+                                       "PM2.5 Hava Kalitesi", None, "pm_quality"),
+                    _VestelKnownSensor(coordinator, entry.entry_id, device, "ACPOLVC",
+                                       "VOC Hava Kalitesi", None, "voc_quality"),
+                    _VestelKnownSensor(coordinator, entry.entry_id, device, "ACOAFLP",
+                                       "Koku/Alerjen Filtre Ömrü", PERCENTAGE, "odor_filter"),
+                    _VestelKnownSensor(coordinator, entry.entry_id, device, "ACPSCLP",
+                                       "Partikül Sensörü Temizleme Ömrü", PERCENTAGE, "particle_filter"),
+                    _VestelKnownSensor(coordinator, entry.entry_id, device, "ACERROR",
+                                       "Klima Hata Kodu", None, "ac_error"),
+                    _VestelKnownSensor(coordinator, entry.entry_id, device, "ACERRTW",
+                                       "Klima İkinci Hata Kodu", None, "ac_error2"),
+                    _VestelKnownSensor(coordinator, entry.entry_id, device, "ACWARNG",
+                                       "Klima Uyarı Kodu", None, "warning"),
+                    _VestelKnownSensor(coordinator, entry.entry_id, device, "CONNRSS",
+                                       "Bağlantı RSSI", "dBm", "conn_rssi"),
+                    _VestelKnownSensor(coordinator, entry.entry_id, device, "WIFIRSS",
+                                       "Wi-Fi RSSI", None, "wifi_rssi"),
+                    _VestelKnownSensor(coordinator, entry.entry_id, device, "ACVERSI",
+                                       "Klima Yazılım Versiyonu", None, "version"),
+                ]
             )
-        )
-        entities.append(
-            _VestelAliasSensor(
-                coordinator, entry.entry_id, device,
-                "tvoc", "TVOC", TVOC_KEYS, "ppb",
-            )
-        )
 
-        # Individual diagnostic bits from ACERROR / ACERRTW.
-        for bit, label in ERROR_BITS.items():
+            # Numeric PM2.5 / TVOC: unavailable if this particular model/API
+            # does not publish a numeric field. ACPOLPM/ACPOLVC remain quality
+            # classification sensors above.
             entities.append(
-                _VestelErrorBitSensor(
+                _VestelAliasSensor(
                     coordinator, entry.entry_id, device,
-                    source="ACERROR", bit=bit, label=label,
+                    "pm25", "PM2.5", PM25_KEYS, "µg/m³",
                 )
             )
-        for bit, label in ERRTW_BITS.items():
             entities.append(
-                _VestelErrorBitSensor(
+                _VestelAliasSensor(
                     coordinator, entry.entry_id, device,
-                    source="ACERRTW", bit=bit, label=label,
+                    "tvoc", "TVOC", TVOC_KEYS, "ppb",
                 )
             )
+
+            # Individual diagnostic bits from ACERROR / ACERRTW.
+            for bit, label in ERROR_BITS.items():
+                entities.append(
+                    _VestelErrorBitSensor(
+                        coordinator, entry.entry_id, device,
+                        source="ACERROR", bit=bit, label=label,
+                    )
+                )
+            for bit, label in ERRTW_BITS.items():
+                entities.append(
+                    _VestelErrorBitSensor(
+                        coordinator, entry.entry_id, device,
+                        source="ACERRTW", bit=bit, label=label,
+                    )
+                )
 
         # Every field returned by the cloud is also exposed as a raw
-        # diagnostic sensor. This is intentional for reverse engineering:
-        # when you press a new function in the official app, its changing
-        # ACxxxx value immediately becomes visible in HA.
-        raw = coordinator.data.get(device_id, {}).get("raw", {})
+        # diagnostic sensor - for every appliance type, not just ACs. This
+        # is intentional for reverse engineering: when you press a new
+        # function in the official app (also on fridges), its changing
+        # value immediately becomes visible in HA.
+        raw = status.get("raw", {})
         if isinstance(raw, dict):
             for key in raw:
                 entities.append(

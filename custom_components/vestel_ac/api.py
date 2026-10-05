@@ -14,6 +14,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 import re
 import secrets
 import time
@@ -44,6 +45,8 @@ from .const import (
     TEMP_OFFSET,
     TOKEN_ENDPOINT,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 # The Cognito Hosted UI login form embeds a CSRF token under one of these
 # names depending on how it was deployed. We try each in turn.
@@ -313,14 +316,114 @@ class VestelAcApi:
                     device_id = dev.get("deviceId")
                     if not device_id:
                         continue
+                    device_type = str(
+                        dev.get("deviceType") or dev.get("type") or dev.get("category") or ""
+                    )
+                    if not device_type:
+                        # No recognizable type field - log the whole item at
+                        # debug level so new appliance types (fridges,
+                        # dishwashers, ...) can be identified from the logs
+                        # instead of guesswork.
+                        _LOGGER.debug(
+                            "Vestel device %s has no recognizable type field; "
+                            "item keys: %s (item: %s)",
+                            device_id,
+                            list(dev),
+                            dev,
+                        )
                     devices.append(
                         {
                             "device_id": device_id,
                             "device_name": dev.get("deviceName", device_id),
                             "home_name": home_name,
+                            "device_type": device_type,
                         }
                     )
         return devices
+
+    @staticmethod
+    def _parse_status(d: dict[str, Any]) -> dict[str, Any]:
+        """Decode one raw cloud status payload (the "data" object of the
+        legacy status endpoint) into the integration's internal format.
+
+        The same endpoint also serves non-AC appliances (e.g. Vestel
+        fridges), whose payloads carry a completely different set of fields
+        and no ACGENSI at all. Rather than crashing the whole coordinator
+        on them (the old KeyError: 'ACGENSI' setup failure), return a
+        minimal {"is_ac": False, "raw": ...} record: platforms gate on
+        "is_ac" so only the generic raw diagnostic sensors attach to such
+        devices, and the raw payload stays available for reverse
+        engineering.
+
+        If a payload claims to be an AC (ACGENSI present) but is missing or
+        malformed elsewhere, degrade to the same non-AC record instead of
+        raising - a half-parsed climate entity is worse than none.
+        """
+        status: dict[str, Any] = {"is_ac": False, "raw": d}
+
+        if "ACGENSI" not in d:
+            return status
+
+        try:
+            gensi = int(d["ACGENSI"])
+            mode_raw = gensi & 7
+            fan_raw = gensi >> 3
+            temp = int(d["ACTEMOT"]) - TEMP_OFFSET
+            room_temp = int(d["ACROOTE"])
+            mode = MODE_NAME.get(mode_raw, "cool")
+            fan = FAN_NAME.get(fan_raw, "auto")
+            on = mode_raw != 5
+
+            # ACFANPO: packed toggles (turbo/sleep/ionizer/eco) + louver
+            # positions (vertical/horizontal), confirmed against real captures.
+            fanpo_raw = int(d.get("ACFANPO", 0))
+            turbo = bool(fanpo_raw & FANPO_TURBO_BIT)
+            vertical = (fanpo_raw >> FANPO_VERTICAL_SHIFT) & FANPO_LOUVER_MASK
+            horizontal = (fanpo_raw >> FANPO_HORIZONTAL_SHIFT) & FANPO_LOUVER_MASK
+            sleep = bool(fanpo_raw & FANPO_SLEEP_BIT)
+            ionizer = bool(fanpo_raw & FANPO_IONIZER_BIT)
+            eco = bool(fanpo_raw & FANPO_ECO_BIT)
+
+            # ACOFFTV: auto-off (delayed shutdown) target clock time.
+            offtv_raw = int(d.get("ACOFFTV", OFFTV_DISABLED))
+            auto_off_enabled = offtv_raw != OFFTV_DISABLED
+            auto_off_hour = offtv_raw & 0x1F if auto_off_enabled else None
+            auto_off_minute = (offtv_raw >> 5) & 0x1F if auto_off_enabled else None
+        except (KeyError, TypeError, ValueError) as err:
+            _LOGGER.warning(
+                "Vestel AC: status payload had ACGENSI but could not be "
+                "decoded (%s); exposing raw fields only: %s",
+                err,
+                d,
+            )
+            return status
+
+        # Full, unparsed status payload from Vestel is kept in "raw" - the
+        # API returns other AC* fields too. Exposed as a climate entity
+        # attribute so you can diff it before/after pressing a button in
+        # the official app and spot which field changes - see
+        # async_send_raw_code() to then test your guess.
+        status.update(
+            {
+                "is_ac": True,
+                "on": on,
+                "mode": mode,
+                "fan": fan,
+                "temp": temp,
+                "room_temp": room_temp,
+                "fanpo_raw": fanpo_raw,
+                "turbo": turbo,
+                "vertical": vertical,
+                "horizontal": horizontal,
+                "sleep": sleep,
+                "ionizer": ionizer,
+                "eco": eco,
+                "auto_off_enabled": auto_off_enabled,
+                "auto_off_hour": auto_off_hour,
+                "auto_off_minute": auto_off_minute,
+            }
+        )
+        return status
 
     async def async_get_status(self, device_id: str) -> dict[str, Any]:
         token = await self.async_get_id_token()
@@ -335,55 +438,7 @@ class VestelAcApi:
                 raise VestelAcError(f"Could not get status for {device_id}: {data}")
 
         d = data["data"]
-        gensi = int(d["ACGENSI"])
-        mode_raw = gensi & 7
-        fan_raw = gensi >> 3
-        temp = int(d["ACTEMOT"]) - TEMP_OFFSET
-        room_temp = int(d["ACROOTE"])
-        mode = MODE_NAME.get(mode_raw, "cool")
-        fan = FAN_NAME.get(fan_raw, "auto")
-        on = mode_raw != 5
-
-        # ACFANPO: packed toggles (turbo/sleep/ionizer/eco) + louver
-        # positions (vertical/horizontal), confirmed against real captures.
-        fanpo_raw = int(d.get("ACFANPO", 0))
-        turbo = bool(fanpo_raw & FANPO_TURBO_BIT)
-        vertical = (fanpo_raw >> FANPO_VERTICAL_SHIFT) & FANPO_LOUVER_MASK
-        horizontal = (fanpo_raw >> FANPO_HORIZONTAL_SHIFT) & FANPO_LOUVER_MASK
-        sleep = bool(fanpo_raw & FANPO_SLEEP_BIT)
-        ionizer = bool(fanpo_raw & FANPO_IONIZER_BIT)
-        eco = bool(fanpo_raw & FANPO_ECO_BIT)
-
-        # ACOFFTV: auto-off (delayed shutdown) target clock time.
-        offtv_raw = int(d.get("ACOFFTV", OFFTV_DISABLED))
-        auto_off_enabled = offtv_raw != OFFTV_DISABLED
-        auto_off_hour = offtv_raw & 0x1F if auto_off_enabled else None
-        auto_off_minute = (offtv_raw >> 5) & 0x1F if auto_off_enabled else None
-
-        return {
-            "on": on,
-            "mode": mode,
-            "fan": fan,
-            "temp": temp,
-            "room_temp": room_temp,
-            "fanpo_raw": fanpo_raw,
-            "turbo": turbo,
-            "vertical": vertical,
-            "horizontal": horizontal,
-            "sleep": sleep,
-            "ionizer": ionizer,
-            "eco": eco,
-            "auto_off_enabled": auto_off_enabled,
-            "auto_off_hour": auto_off_hour,
-            "auto_off_minute": auto_off_minute,
-            # Full, unparsed status payload from Vestel - we only decode
-            # ACGENSI/ACTEMOT/ACROOTE/ACFANPO/ACOFFTV above, but the API
-            # returns other AC* fields too. Exposed as a climate entity
-            # attribute so you can diff it before/after pressing a button
-            # in the official app and spot which field changes - see
-            # async_send_raw_code() to then test your guess.
-            "raw": d,
-        }
+        return self._parse_status(d)
 
     @staticmethod
     def _build_field(field: str, value: int) -> str:
