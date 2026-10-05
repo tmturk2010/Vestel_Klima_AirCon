@@ -9,9 +9,36 @@ whole integration when any non-AC device was on the account).
 
 import pytest
 
-from custom_components.vestel_ac.api import VestelAcApi
+from custom_components.vestel_ac.api import (
+    VestelAcApi,
+    fridge_door_is_open,
+    is_fridge_payload,
+)
 
 TEMP_OFFSET = 32736
+
+
+def _fridge_payload(**overrides) -> dict:
+    """A real Vestel fridge status payload (captured from a live device).
+
+    All fields are RF* / Wi-Fi related and there is no ACGENSI anywhere -
+    exactly the shape that used to blow the coordinator up with
+    KeyError: 'ACGENSI'.
+    """
+    payload = {
+        "RFCLOCK": "00000",
+        "RFCOOER": "00000",
+        "RFDCOOL": "00000",
+        "RFDEFEC": "00000",
+        "RFDOORA": "00003",
+        "RFMODEA": "00000",
+        "RFSSAVE": "00000",
+        "RFTEMSE": "00530",
+        "WIFIRSS": "00055",
+        "WIFISET": "00000",
+    }
+    payload.update(overrides)
+    return payload
 
 
 def _ac_payload(**overrides) -> dict:
@@ -77,18 +104,20 @@ class TestAcPayloads:
 
 
 class TestNonAcPayloads:
-    def test_fridge_payload_returns_raw_only(self):
-        # Made-up fridge-style fields: the point is that no AC* fields
-        # are present, which used to crash the coordinator.
-        payload = {"RFTEMPF": "004", "RFTEMPR": "007", "DOOROPEN": "00000"}
+    def test_unknown_payload_returns_raw_only(self):
+        # No AC* and no RF* fields: neither AC nor fridge, but the payload
+        # must still survive as "raw" (this used to crash the coordinator).
+        payload = {"SOMETHING": "004", "OTHER": "007"}
         status = VestelAcApi._parse_status(payload)
         assert status["is_ac"] is False
+        assert status["is_fridge"] is False
         assert status["raw"] is payload
         assert "mode" not in status
 
     def test_empty_payload(self):
         status = VestelAcApi._parse_status({})
         assert status["is_ac"] is False
+        assert status["is_fridge"] is False
 
     def test_acgeni_without_required_fields_does_not_crash(self):
         status = VestelAcApi._parse_status({"ACGENSI": "00017"})
@@ -100,6 +129,60 @@ class TestNonAcPayloads:
             _ac_payload(ACGENSI="not-a-number", ACTEMOT="x")
         )
         assert status["is_ac"] is False
+
+
+class TestFridgePayloads:
+    """Fridges share the status endpoint but not the field set - they are
+    detected by the RF* prefix and currently only expose the door."""
+
+    def test_fridge_payload_is_detected(self):
+        payload = _fridge_payload()
+        status = VestelAcApi._parse_status(payload)
+        assert status["is_ac"] is False
+        assert status["is_fridge"] is True
+        assert status["raw"] is payload
+        # No AC-only keys leaked into a fridge record.
+        assert "mode" not in status
+        assert "temp" not in status
+
+    def test_closed_door(self):
+        status = VestelAcApi._parse_status(_fridge_payload(RFDOORA="00003"))
+        assert status["fridge"]["door_open"] is False
+        assert status["fridge"]["door_raw"] == "00003"
+
+    def test_open_door(self):
+        # Observed while the door was open and the fridge was alarming.
+        status = VestelAcApi._parse_status(_fridge_payload(RFDOORA="00001"))
+        assert status["fridge"]["door_open"] is True
+
+    def test_door_uses_bit_rule_not_literal_value(self):
+        # 00002 sets the "closed" bit even though it is not 00003, so it
+        # must not read as open - the rule generalises past the two values
+        # seen so far.
+        assert fridge_door_is_open("00002") is False
+        assert fridge_door_is_open("00007") is False
+        assert fridge_door_is_open("00005") is True
+
+    def test_missing_door_field_is_unknown(self):
+        payload = _fridge_payload()
+        del payload["RFDOORA"]
+        status = VestelAcApi._parse_status(payload)
+        assert status["is_fridge"] is True
+        assert status["fridge"]["door_open"] is None
+        assert fridge_door_is_open(None) is None
+        assert fridge_door_is_open("not-a-number") is None
+
+    def test_is_fridge_payload_helper(self):
+        assert is_fridge_payload(_fridge_payload()) is True
+        assert is_fridge_payload({"ACGENSI": "00017"}) is False
+        assert is_fridge_payload({}) is False
+
+    def test_non_ac_fridge_fields_do_not_crash(self):
+        # A fridge reporting a non-numeric value on one field must not
+        # take the door decode down with it.
+        status = VestelAcApi._parse_status(_fridge_payload(RFDOORA="--"))
+        assert status["is_fridge"] is True
+        assert status["fridge"]["door_open"] is None
 
 
 class TestAcCodeBuilders:

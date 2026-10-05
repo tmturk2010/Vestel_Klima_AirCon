@@ -247,7 +247,23 @@ The Vestel Smart Life cloud serves every appliance type through the same endpoin
 - Other appliances (e.g. Vestel fridges) appear as a normal device with **raw diagnostic sensors** for every field the cloud returns - ideal for feature discovery.
 - One failing or unsupported appliance no longer breaks the whole integration (previously a fridge on the account caused a `KeyError: 'ACGENSI'` setup failure).
 
-Fridge / other-appliance *controls* are not implemented yet - their command fields are undocumented. Use the **Feature Discovery** workflow below to decode them; anything you find is welcome as a PR.
+### Fridge support (work in progress)
+
+A real Vestel fridge returns a field set that all starts with `RF`, so the integration detects it automatically and creates a proper **door binary sensor** (named `Kapı`) on the fridge device instead of exposing it as an AC:
+
+| Field | Meaning | Status |
+| --- | --- | --- |
+| `RFDOORA` | Door state - `00003` closed, `00001` open (confirmed on a live device: the fridge alarmed ~2 min after the door was left open) | **decoded** -> door binary sensor |
+| `RFTEMSE` | Temperature setpoint / reading (e.g. `00530`) | undecoded - visible as a raw diagnostic sensor |
+| `RFMODEA` | Mode | undecoded |
+| `RFSSAVE` | Eco / super-save | undecoded |
+| `RFDCOOL` | Fast cool | undecoded |
+| `RFDEFEC` | Defrost | undecoded |
+| `RFCOOER` | Cooler | undecoded |
+| `RFCLOCK` | Clock | undecoded |
+| `WIFIRSS` / `WIFISET` | Wi-Fi signal / settings | raw |
+
+Fridge *controls* (setting the temperature, toggling eco, ...) are not implemented yet: the command format is undocumented and the integration currently always sends `device_type: "AC"`. Use the **Feature Discovery** workflow below to decode them - anything you find is welcome as a PR.
 
 ## 🧪 Raw API Services
 
@@ -553,7 +569,23 @@ Vestel Akıllı Yaşam bulutu, tüm cihaz tiplerine aynı uç noktalar üzerinde
 - Diğer cihazlar (ör. Vestel buzdolabı), bulutun döndürdüğü her alan için **ham tanı sensörleriyle** birlikte normal bir cihaz olarak görünür - özellik keşfi için idealdir.
 - Tek bir cihazın hatası veya desteklenmemesi artık tüm entegrasyonu bozmaz (daha önce hesapta buzdolabı olması `KeyError: 'ACGENSI'` kurulum hatasına yol açıyordu).
 
-Buzdolabı ve diğer cihazlar için *kontroller* henüz uygulanmadı - komut alanları dokümante değil. Çözmek için aşağıdaki **Yeni Özellik Keşfetme** iş akışını kullanın; bulduklarınız PR olarak memnuniyetle karşılanır.
+### Buzdolabı desteği (geliştirme aşamasında)
+
+Gerçek bir Vestel buzdolabı, tamamı `RF` ile başlayan bir alan kümesi döndürüyor; entegrasyon bunu otomatik algılıyor ve cihazı klima gibi göstermek yerine üzerinde düzgün bir **kapı binary sensörü** (`Kapı`) oluşturuyor:
+
+| Alan | Anlamı | Durum |
+| --- | --- | --- |
+| `RFDOORA` | Kapı durumu - `00003` kapalı, `00001` açık (gerçek cihazda doğrulandı: kapı açık bırakılınca ~2 dk sonra cihaz alarm verdi) | **çözüldü** -> kapı binary sensörü |
+| `RFTEMSE` | Sıcaklık ayarı / okuması (ör. `00530`) | çözülmedi - ham tanı sensörü olarak görünür |
+| `RFMODEA` | Mod | çözülmedi |
+| `RFSSAVE` | Eco / süper tasarruf | çözülmedi |
+| `RFDCOOL` | Hızlı soğutma | çözülmedi |
+| `RFDEFEC` | Buz çözme | çözülmedi |
+| `RFCOOER` | Soğutucu | çözülmedi |
+| `RFCLOCK` | Saat | çözülmedi |
+| `WIFIRSS` / `WIFISET` | Wi-Fi sinyali / ayarları | ham |
+
+Buzdolabı *kontrolleri* (sıcaklığı ayarlama, eco açma, ...) henüz uygulanmadı: komut formatı dokümante değil ve entegrasyon şu an her zaman `device_type: "AC"` gönderiyor. Çözmek için aşağıdaki **Yeni Özellik Keşfetme** iş akışını kullanın; bulduklarınız PR olarak memnuniyetle karşılanır.
 
 ## 🧪 Ham API Servisleri
 

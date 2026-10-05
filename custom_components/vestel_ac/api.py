@@ -67,6 +67,65 @@ _LOGIN_ERROR_HINTS = (
 
 MAX_LOGIN_HOPS = 8
 
+# ---------------------------------------------------------------------- #
+# Non-AC appliances (fridges / buzdolabı)
+# ---------------------------------------------------------------------- #
+# Fridges answer the very same legacy status endpoint as ACs, but with a
+# completely different field set whose keys all start with "RF"
+# (RFCLOCK, RFCOOER, RFDCOOL, RFDEFEC, RFDOORA, RFMODEA, RFSSAVE,
+# RFTEMSE, ...). An AC payload always carries ACGENSI; a fridge payload
+# never does. Matching the RF prefix is therefore enough to tell the two
+# apart without hard-coding an appliance-type list from the cloud.
+FRIDGE_FIELD_PREFIX = "RF"
+
+# Observed on a real Vestel fridge: RFDOORA was 00003 while the door was
+# closed and 00001 while it was open (the appliance itself then started
+# alarming a couple of minutes later). Bit 1 (value 2) behaves as the
+# "door closed" flag, so testing that bit generalises better than
+# comparing against one literal value.
+FRIDGE_DOOR_CLOSED_BIT = 0b010
+FRIDGE_DOOR_KEYS = ("RFDOORA", "RFDOORB")
+
+
+def _as_int(value: Any) -> Optional[int]:
+    """Best-effort decimal parse of a cloud field (values arrive as
+    zero-padded strings such as "00003"). Returns None on anything that
+    is not a whole number."""
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def is_fridge_payload(d: dict[str, Any]) -> bool:
+    """True when a status payload looks like a fridge (any RF* field)."""
+    if not isinstance(d, dict):
+        return False
+    return any(str(key).upper().startswith(FRIDGE_FIELD_PREFIX) for key in d)
+
+
+def fridge_door_is_open(value: Any) -> Optional[bool]:
+    """Decode an RFDOORA value into a door state.
+
+    Only 00003 (closed) and 00001 (open) have been observed so far; the
+    bit-based rule below reproduces both and is the best guess for any
+    other value. Returns None when the field is missing/unparseable so
+    the binary sensor can report "unknown" instead of "closed".
+    """
+    number = _as_int(value)
+    if number is None:
+        return None
+    return (number & FRIDGE_DOOR_CLOSED_BIT) == 0
+
+
+def fridge_door_raw(d: dict[str, Any]) -> Any:
+    """Return the first present door field (RFDOORA / RFDOORB), if any."""
+    upper = {str(key).upper(): key for key in d}
+    for key in FRIDGE_DOOR_KEYS:
+        if key in upper:
+            return d[upper[key]]
+    return None
+
 
 class VestelAcError(Exception):
     """Generic API error."""
@@ -359,9 +418,19 @@ class VestelAcApi:
         malformed elsewhere, degrade to the same non-AC record instead of
         raising - a half-parsed climate entity is worse than none.
         """
-        status: dict[str, Any] = {"is_ac": False, "raw": d}
+        status: dict[str, Any] = {"is_ac": False, "is_fridge": False, "raw": d}
 
         if "ACGENSI" not in d:
+            # Not an AC. If it looks like a fridge, decode what we already
+            # understand (the door) and leave the rest in "raw" for
+            # further reverse engineering.
+            if is_fridge_payload(d):
+                door_raw = fridge_door_raw(d)
+                status["is_fridge"] = True
+                status["fridge"] = {
+                    "door_raw": door_raw,
+                    "door_open": fridge_door_is_open(door_raw),
+                }
             return status
 
         try:

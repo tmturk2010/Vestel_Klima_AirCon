@@ -184,11 +184,16 @@ class _VestelBaseSensor(CoordinatorEntity[VestelAcCoordinator], SensorEntity):
     ) -> None:
         super().__init__(coordinator)
         self._device_id = device["device_id"]
+        # The same base sensor serves ACs and non-AC appliances (fridges get
+        # the raw RF* fields). Label the device honestly instead of calling
+        # every appliance "Smart AC (WiFi)".
+        status = coordinator.data.get(self._device_id, {})
+        model = "Buzdolabı" if status.get("is_fridge") else "Smart AC (WiFi)"
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, self._device_id)},
             manufacturer="Vestel",
             name=device.get("device_name", self._device_id),
-            model="Smart AC (WiFi)",
+            model=model,
         )
         self._entry_id = entry_id
 

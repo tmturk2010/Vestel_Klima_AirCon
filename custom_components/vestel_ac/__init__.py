@@ -33,6 +33,7 @@ PLATFORMS: list[Platform] = [
     Platform.SWITCH,
     Platform.TIME,
     Platform.SENSOR,
+    Platform.BINARY_SENSOR,
 ]
 
 SERVICE_SEND_RAW_CODE = "send_raw_code"
@@ -203,6 +204,21 @@ def filter_ac_devices(stored: dict[str, Any]) -> list[dict[str, str]]:
         device
         for device in stored["devices"]
         if coordinator.data.get(device["device_id"], {}).get("is_ac", False)
+    ]
+
+
+def filter_fridge_devices(stored: dict[str, Any]) -> list[dict[str, str]]:
+    """Return only the stored devices that parsed as fridges.
+
+    Counterpart of ``filter_ac_devices`` for the appliance types the
+    generic raw sensors cannot express yet (currently the fridge door in
+    binary_sensor.py).
+    """
+    coordinator: VestelAcCoordinator = stored["coordinator"]
+    return [
+        device
+        for device in stored["devices"]
+        if coordinator.data.get(device["device_id"], {}).get("is_fridge", False)
     ]
 
 
