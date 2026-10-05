@@ -12,6 +12,7 @@ import pytest
 from custom_components.vestel_ac.api import (
     VestelAcApi,
     fridge_door_states,
+    fridge_temperatures,
     is_fridge_payload,
 )
 
@@ -131,9 +132,82 @@ class TestNonAcPayloads:
         assert status["is_ac"] is False
 
 
+# Real RFTEMSE calibration points captured from a live Vestel fridge:
+# (cooler °C, freezer °C, raw RFTEMSE string).
+RFTEMSE_CALIBRATION = (
+    (2, -16, "00528"),
+    (2, -18, "00530"),
+    (2, -20, "00532"),
+    (2, -22, "00534"),
+    (2, -24, "00536"),
+    (4, -16, "01040"),
+    (4, -18, "01042"),
+    (4, -20, "01044"),
+    (4, -22, "01046"),
+    (4, -24, "01048"),
+    (5, -16, "01296"),
+    (5, -18, "01298"),
+    (5, -20, "01300"),
+    (5, -22, "01302"),
+    (5, -24, "01304"),
+)
+
+
+class TestFridgeTemperatures:
+    """RFTEMSE packs both setpoints into one integer: high byte = cooler,
+    low byte = absolute freezer temperature."""
+
+    @pytest.mark.parametrize("cooler,freezer,raw", RFTEMSE_CALIBRATION)
+    def test_calibration_table_round_trips(self, cooler, freezer, raw):
+        assert fridge_temperatures(raw) == {
+            "cooler": cooler,
+            "freezer": freezer,
+        }
+
+    def test_decode_is_bit_packed_not_decimal_halves(self):
+        # 01300 splits as decimal 013|00 but really is 0x514 = 5 | 20.
+        assert fridge_temperatures("01300") == {"cooler": 5, "freezer": -20}
+        assert fridge_temperatures(1300) == {"cooler": 5, "freezer": -20}
+
+    def test_unknown_and_malformed_are_none(self):
+        assert fridge_temperatures(None) is None
+        assert fridge_temperatures("--") is None
+        assert fridge_temperatures("not-a-number") is None
+        assert fridge_temperatures("-1") is None
+
+    def test_temperatures_flow_through_parse_status(self):
+        status = VestelAcApi._parse_status(_fridge_payload(RFTEMSE="01304"))
+        assert status["is_fridge"] is True
+        assert status["fridge"]["cooler_temp"] == 5
+        assert status["fridge"]["freezer_temp"] == -24
+        assert status["fridge"]["temp_raw"] == "01304"
+
+    def test_default_fixture_decodes(self):
+        # The captured fixture ships RFTEMSE=00530 -> +2 / -18 °C.
+        status = VestelAcApi._parse_status(_fridge_payload())
+        assert status["fridge"]["cooler_temp"] == 2
+        assert status["fridge"]["freezer_temp"] == -18
+
+    def test_missing_rftemse_is_unknown(self):
+        payload = _fridge_payload()
+        del payload["RFTEMSE"]
+        status = VestelAcApi._parse_status(payload)
+        assert status["is_fridge"] is True
+        assert status["fridge"]["cooler_temp"] is None
+        assert status["fridge"]["freezer_temp"] is None
+        assert status["fridge"]["temp_raw"] is None
+
+    def test_non_numeric_rftemse_does_not_break_door(self):
+        status = VestelAcApi._parse_status(_fridge_payload(RFTEMSE="--"))
+        assert status["is_fridge"] is True
+        assert status["fridge"]["cooler_temp"] is None
+        assert status["fridge"]["fridge_door_open"] is False
+
+
 class TestFridgePayloads:
     """Fridges share the status endpoint but not the field set - they are
-    detected by the RF* prefix and currently only expose the door."""
+    detected by the RF* prefix and currently expose the door and the
+    decoded setpoints."""
 
     def test_fridge_payload_is_detected(self):
         payload = _fridge_payload()

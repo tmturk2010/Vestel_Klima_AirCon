@@ -91,6 +91,12 @@ FRIDGE_FIELD_PREFIX = "RF"
 FRIDGE_DOOR_CLOSED_BITS = {"fridge": 0b10, "freezer": 0b01}
 FRIDGE_DOOR_KEYS = ("RFDOORA", "RFDOORB")
 
+# RFTEMSE packs both setpoints into one integer, high byte = cooler and
+# low byte = absolute freezer temperature (the freezer is always below 0).
+# Reverse engineered on a real fridge from a 15-point calibration table
+# (+2/+4/+5 °C cooler against -16..-24 °C freezer), see fridge_temperatures().
+FRIDGE_TEMP_KEYS = ("RFTEMSE",)
+
 
 def _as_int(value: Any) -> Optional[int]:
     """Best-effort decimal parse of a cloud field (values arrive as
@@ -124,13 +130,51 @@ def fridge_door_states(value: Any) -> Optional[dict[str, bool]]:
     }
 
 
-def fridge_door_raw(d: dict[str, Any]) -> Any:
-    """Return the first present door field (RFDOORA / RFDOORB), if any."""
+def _first_upper_field(d: dict[str, Any], keys: tuple[str, ...]) -> Any:
+    """Return the value of the first of ``keys`` present in ``d``,
+    matching field names case-insensitively; None when none is present."""
+    if not isinstance(d, dict):
+        return None
     upper = {str(key).upper(): key for key in d}
-    for key in FRIDGE_DOOR_KEYS:
+    for key in keys:
         if key in upper:
             return d[upper[key]]
     return None
+
+
+def fridge_door_raw(d: dict[str, Any]) -> Any:
+    """Return the first present door field (RFDOORA / RFDOORB), if any."""
+    return _first_upper_field(d, FRIDGE_DOOR_KEYS)
+
+
+def fridge_temp_raw(d: dict[str, Any]) -> Any:
+    """Return the raw RFTEMSE value, if present."""
+    return _first_upper_field(d, FRIDGE_TEMP_KEYS)
+
+
+def fridge_temperatures(value: Any) -> Optional[dict[str, int]]:
+    """Decode an RFTEMSE value into the cooler/freezer setpoints in °C.
+
+    The field is a bit-packed pair, not two decimal halves:
+
+        RFTEMSE = (cooler << 8) | abs(freezer)
+
+    Reverse engineered on a real Vestel fridge from a 15-point calibration
+    table (cooler +2/+4/+5 °C against freezer -16..-24 °C); every point
+    fits exactly:
+
+        00528 = 0x210 -> cooler  2 °C, freezer -16 °C
+        01042 = 0x412 -> cooler  4 °C, freezer -18 °C
+        01304 = 0x518 -> cooler  5 °C, freezer -24 °C
+
+    Returns ``{"cooler": int, "freezer": int}`` or None when the field is
+    missing/unparseable, so the temperature sensors report "unknown"
+    instead of a bogus °C.
+    """
+    number = _as_int(value)
+    if number is None or number < 0:
+        return None
+    return {"cooler": number >> 8, "freezer": -(number & 0xFF)}
 
 
 class VestelAcError(Exception):
@@ -433,11 +477,16 @@ class VestelAcApi:
             if is_fridge_payload(d):
                 door_raw = fridge_door_raw(d)
                 states = fridge_door_states(door_raw)
+                temp_raw = fridge_temp_raw(d)
+                temps = fridge_temperatures(temp_raw)
                 status["is_fridge"] = True
                 status["fridge"] = {
                     "door_raw": door_raw,
                     "fridge_door_open": states["fridge"] if states else None,
                     "freezer_door_open": states["freezer"] if states else None,
+                    "temp_raw": temp_raw,
+                    "cooler_temp": temps["cooler"] if temps else None,
+                    "freezer_temp": temps["freezer"] if temps else None,
                 }
             return status
 

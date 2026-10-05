@@ -3,9 +3,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import (
+    SensorDeviceClass,
+    SensorEntity,
+    SensorStateClass,
+)
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import PERCENTAGE, EntityCategory
+from homeassistant.const import PERCENTAGE, EntityCategory, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -95,6 +99,23 @@ async def async_setup_entry(
         # AC-specific known sensors: the fields and names below only make
         # sense for air conditioners. Other appliance types (e.g. fridges)
         # are covered by the raw sensors at the bottom of this loop.
+        # Fridge setpoints decoded from RFTEMSE (cooler high byte, freezer
+        # low byte) - plain temperature sensors rather than diagnostics, so
+        # they can be charted and automated on.
+        if status.get("is_fridge"):
+            entities.extend(
+                [
+                    _VestelFridgeTempSensor(
+                        coordinator, entry.entry_id, device,
+                        "cooler_temp", "Soğutucu Sıcaklığı", "fridge_cooler_temp",
+                    ),
+                    _VestelFridgeTempSensor(
+                        coordinator, entry.entry_id, device,
+                        "freezer_temp", "Dondurucu Sıcaklığı", "fridge_freezer_temp",
+                    ),
+                ]
+            )
+
         if is_ac:
             entities.extend(
                 [
@@ -230,6 +251,39 @@ class _VestelKnownSensor(_VestelBaseSensor):
         if self._kind in {"conn_rssi"}:
             return _number(value)
         return value
+
+
+class _VestelFridgeTempSensor(_VestelBaseSensor):
+    """A decoded fridge setpoint in °C (cooler or freezer), from RFTEMSE."""
+
+    # Unlike the raw diagnostic sensors this is a normal reading entity.
+    _attr_entity_category = None
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(
+        self, coordinator, entry_id, device, state_key, name, suffix
+    ) -> None:
+        super().__init__(coordinator, entry_id, device)
+        self._state_key = state_key
+        self._attr_name = name
+        self._attr_unique_id = f"{entry_id}_{device['device_id']}_{suffix}"
+
+    @property
+    def _fridge(self) -> dict[str, Any]:
+        status = self.coordinator.data.get(self._device_id, {})
+        fridge = status.get("fridge")
+        return fridge if isinstance(fridge, dict) else {}
+
+    @property
+    def native_value(self) -> int | None:
+        return self._fridge.get(self._state_key)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        # Keep the undecoded RFTEMSE value visible next to the decoded °C.
+        return {"ham_deger": self._fridge.get("temp_raw")}
 
 
 class _VestelAliasSensor(_VestelBaseSensor):

@@ -249,12 +249,12 @@ The Vestel Smart Life cloud serves every appliance type through the same endpoin
 
 ### Fridge support (work in progress)
 
-A real Vestel fridge returns a field set that all starts with `RF`, so the integration detects it automatically and creates proper **door binary sensors** (`Kapı` for the fridge door, `Dondurucu Kapısı` for the freezer door) on the fridge device instead of exposing it as an AC:
+A real Vestel fridge returns a field set that all starts with `RF`, so the integration detects it automatically and creates proper **door binary sensors** (`Kapı` for the fridge door, `Dondurucu Kapısı` for the freezer door) plus decoded **temperature sensors** (`Soğutucu Sıcaklığı`, `Dondurucu Sıcaklığı`) on the fridge device instead of exposing it as an AC:
 
 | Field | Meaning | Status |
 | --- | --- | --- |
 | `RFDOORA` | Door state - a 2-bit field, one bit per door: `00003` (0b11) both closed, `00001` (0b01) fridge door open, `00002` (0b10) freezer door open (confirmed on a live device: the fridge alarmed ~2 min after the fridge door was left open) | **decoded** -> fridge + freezer door binary sensors |
-| `RFTEMSE` | Temperature setpoint / reading (e.g. `00530`) | undecoded - visible as a raw diagnostic sensor |
+| `RFTEMSE` | Temperature setpoints - bit-packed, **not** two decimal halves: high byte = cooler °C, low byte = absolute freezer °C, i.e. `RFTEMSE = (cooler << 8) \| abs(freezer)`. E.g. `00528` (0x210) = +2 °C / -16 °C, `01304` (0x518) = +5 °C / -24 °C (confirmed against a 15-point calibration table) | **decoded** -> `Soğutucu Sıcaklığı` + `Dondurucu Sıcaklığı` temperature sensors |
 | `RFMODEA` | Mode | undecoded |
 | `RFSSAVE` | Eco / super-save | undecoded |
 | `RFDCOOL` | Fast cool | undecoded |
@@ -571,12 +571,12 @@ Vestel Akıllı Yaşam bulutu, tüm cihaz tiplerine aynı uç noktalar üzerinde
 
 ### Buzdolabı desteği (geliştirme aşamasında)
 
-Gerçek bir Vestel buzdolabı, tamamı `RF` ile başlayan bir alan kümesi döndürüyor; entegrasyon bunu otomatik algılıyor ve cihazı klima gibi göstermek yerine üzerinde düzgün **kapı binary sensörleri** (`Kapı` buzdolabı kapağı, `Dondurucu Kapısı` dondurucu kapağı) oluşturuyor:
+Gerçek bir Vestel buzdolabı, tamamı `RF` ile başlayan bir alan kümesi döndürüyor; entegrasyon bunu otomatik algılıyor ve cihazı klima gibi göstermek yerine üzerinde düzgün **kapı binary sensörleri** (`Kapı` buzdolabı kapağı, `Dondurucu Kapısı` dondurucu kapağı) ve çözülmüş **sıcaklık sensörleri** (`Soğutucu Sıcaklığı`, `Dondurucu Sıcaklığı`) oluşturuyor:
 
 | Alan | Anlamı | Durum |
 | --- | --- | --- |
 | `RFDOORA` | Kapı durumu - kapı başına bir bitlik 2 bitlik alan: `00003` (0b11) ikisi de kapalı, `00001` (0b01) buzdolabı kapağı açık, `00002` (0b10) dondurucu kapağı açık (gerçek cihazda doğrulandı: buzdolabı kapağı açık bırakılınca ~2 dk sonra cihaz alarm verdi) | **çözüldü** -> buzdolabı + dondurucu kapı binary sensörleri |
-| `RFTEMSE` | Sıcaklık ayarı / okuması (ör. `00530`) | çözülmedi - ham tanı sensörü olarak görünür |
+| `RFTEMSE` | Sıcaklık ayarları - bit paketli, **iki ondalık yarım değil**: yüksek bayt = soğutucu °C, düşük bayt = dondurucunun mutlak değeri °C, yani `RFTEMSE = (cooler << 8) \| abs(freezer)`. Ör. `00528` (0x210) = +2 °C / -16 °C, `01304` (0x518) = +5 °C / -24 °C (15 noktalı kalibrasyon tablosuyla doğrulandı) | **çözüldü** -> `Soğutucu Sıcaklığı` + `Dondurucu Sıcaklığı` sıcaklık sensörleri |
 | `RFMODEA` | Mod | çözülmedi |
 | `RFSSAVE` | Eco / süper tasarruf | çözülmedi |
 | `RFDCOOL` | Hızlı soğutma | çözülmedi |
