@@ -1,9 +1,9 @@
 """Binary sensors for Vestel appliances that are not air conditioners.
 
-Right now this is just the fridge door (``RFDOORA``). The value semantics
-were reverse engineered from a real device: ``00003`` with the door closed
-and ``00001`` while the door was open (the fridge started alarming a
-couple of minutes later). See ``api.fridge_door_is_open`` for the decode
+Right now this is the fridge door(s), decoded from ``RFDOORA``. The value
+semantics were reverse engineered from a real device: ``00003`` with both
+doors closed, ``00001`` while the fridge door was open and ``00002`` while
+the freezer door was open. See ``api.fridge_door_states`` for the decode
 rule and how to extend it once more states show up.
 """
 from __future__ import annotations
@@ -23,6 +23,12 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from . import VestelAcCoordinator, filter_fridge_devices
 from .const import DOMAIN
 
+# (unique_id suffix, entity name, key in the decoded status dict)
+_DOORS = (
+    ("fridge_door", "Kapı", "fridge_door_open"),
+    ("freezer_door", "Dondurucu Kapısı", "freezer_door_open"),
+)
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -36,8 +42,9 @@ async def async_setup_entry(
     # filter keeps this platform inert for accounts with only air
     # conditioners.
     entities: list[BinarySensorEntity] = [
-        _VestelFridgeDoorSensor(coordinator, entry.entry_id, device)
+        _VestelFridgeDoorSensor(coordinator, entry.entry_id, device, suffix, name, key)
         for device in filter_fridge_devices(stored)
+        for suffix, name, key in _DOORS
     ]
 
     async_add_entities(entities)
@@ -46,7 +53,7 @@ async def async_setup_entry(
 class _VestelFridgeDoorSensor(
     CoordinatorEntity[VestelAcCoordinator], BinarySensorEntity
 ):
-    """Door state of a Vestel fridge (open when RFDOORA's closed bit is clear)."""
+    """One door of a Vestel fridge (open when its RFDOORA bit is clear)."""
 
     _attr_has_entity_name = True
     _attr_device_class = BinarySensorDeviceClass.DOOR
@@ -56,11 +63,15 @@ class _VestelFridgeDoorSensor(
         coordinator: VestelAcCoordinator,
         entry_id: str,
         device: dict[str, str],
+        suffix: str,
+        name: str,
+        state_key: str,
     ) -> None:
         super().__init__(coordinator)
         self._device_id = device["device_id"]
-        self._attr_name = "Kapı"
-        self._attr_unique_id = f"{entry_id}_{self._device_id}_fridge_door"
+        self._state_key = state_key
+        self._attr_name = name
+        self._attr_unique_id = f"{entry_id}_{self._device_id}_{suffix}"
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, self._device_id)},
             manufacturer="Vestel",
@@ -77,7 +88,7 @@ class _VestelFridgeDoorSensor(
 
     @property
     def is_on(self) -> bool | None:
-        return self._fridge.get("door_open")
+        return self._fridge.get(self._state_key)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:

@@ -11,7 +11,7 @@ import pytest
 
 from custom_components.vestel_ac.api import (
     VestelAcApi,
-    fridge_door_is_open,
+    fridge_door_states,
     is_fridge_payload,
 )
 
@@ -145,32 +145,43 @@ class TestFridgePayloads:
         assert "mode" not in status
         assert "temp" not in status
 
-    def test_closed_door(self):
+    def test_both_doors_closed(self):
+        # 00003 (0b11): both doors closed - the normal resting state.
         status = VestelAcApi._parse_status(_fridge_payload(RFDOORA="00003"))
-        assert status["fridge"]["door_open"] is False
+        assert status["fridge"]["fridge_door_open"] is False
+        assert status["fridge"]["freezer_door_open"] is False
         assert status["fridge"]["door_raw"] == "00003"
 
-    def test_open_door(self):
-        # Observed while the door was open and the fridge was alarming.
+    def test_fridge_door_open(self):
+        # 00001 (0b01): observed while the fridge door was open and the
+        # appliance was alarming (bit 1 clear = fridge door open).
         status = VestelAcApi._parse_status(_fridge_payload(RFDOORA="00001"))
-        assert status["fridge"]["door_open"] is True
+        assert status["fridge"]["fridge_door_open"] is True
+        assert status["fridge"]["freezer_door_open"] is False
 
-    def test_door_uses_bit_rule_not_literal_value(self):
-        # 00002 sets the "closed" bit even though it is not 00003, so it
-        # must not read as open - the rule generalises past the two values
-        # seen so far.
-        assert fridge_door_is_open("00002") is False
-        assert fridge_door_is_open("00007") is False
-        assert fridge_door_is_open("00005") is True
+    def test_freezer_door_open(self):
+        # 00002 (0b10): observed while the freezer door was open
+        # (bit 0 clear = freezer door open).
+        status = VestelAcApi._parse_status(_fridge_payload(RFDOORA="00002"))
+        assert status["fridge"]["fridge_door_open"] is False
+        assert status["fridge"]["freezer_door_open"] is True
+
+    def test_door_bits_map_to_doors_independently(self):
+        # One bit per door: bit 1 -> fridge, bit 0 -> freezer.
+        assert fridge_door_states("00003") == {"fridge": False, "freezer": False}
+        assert fridge_door_states("00001") == {"fridge": True, "freezer": False}
+        assert fridge_door_states("00002") == {"fridge": False, "freezer": True}
+        assert fridge_door_states("00000") == {"fridge": True, "freezer": True}
 
     def test_missing_door_field_is_unknown(self):
         payload = _fridge_payload()
         del payload["RFDOORA"]
         status = VestelAcApi._parse_status(payload)
         assert status["is_fridge"] is True
-        assert status["fridge"]["door_open"] is None
-        assert fridge_door_is_open(None) is None
-        assert fridge_door_is_open("not-a-number") is None
+        assert status["fridge"]["fridge_door_open"] is None
+        assert status["fridge"]["freezer_door_open"] is None
+        assert fridge_door_states(None) is None
+        assert fridge_door_states("not-a-number") is None
 
     def test_is_fridge_payload_helper(self):
         assert is_fridge_payload(_fridge_payload()) is True
@@ -182,7 +193,8 @@ class TestFridgePayloads:
         # take the door decode down with it.
         status = VestelAcApi._parse_status(_fridge_payload(RFDOORA="--"))
         assert status["is_fridge"] is True
-        assert status["fridge"]["door_open"] is None
+        assert status["fridge"]["fridge_door_open"] is None
+        assert status["fridge"]["freezer_door_open"] is None
 
 
 class TestAcCodeBuilders:

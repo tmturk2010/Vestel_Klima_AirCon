@@ -78,12 +78,17 @@ MAX_LOGIN_HOPS = 8
 # apart without hard-coding an appliance-type list from the cloud.
 FRIDGE_FIELD_PREFIX = "RF"
 
-# Observed on a real Vestel fridge: RFDOORA was 00003 while the door was
-# closed and 00001 while it was open (the appliance itself then started
-# alarming a couple of minutes later). Bit 1 (value 2) behaves as the
-# "door closed" flag, so testing that bit generalises better than
-# comparing against one literal value.
-FRIDGE_DOOR_CLOSED_BIT = 0b010
+# RFDOORA is a 2-bit field, one bit per door, reverse engineered on a
+# real Vestel fridge:
+#
+#   00003 (0b11) = fridge closed + freezer closed
+#   00001 (0b01) = fridge OPEN   + freezer closed
+#   00002 (0b10) = fridge closed + freezer OPEN
+#
+# so bit 1 (value 2) is the fridge door's "closed" flag and bit 0
+# (value 1) is the freezer door's "closed" flag. A door is open when its
+# own bit is clear.
+FRIDGE_DOOR_CLOSED_BITS = {"fridge": 0b10, "freezer": 0b01}
 FRIDGE_DOOR_KEYS = ("RFDOORA", "RFDOORB")
 
 
@@ -104,18 +109,19 @@ def is_fridge_payload(d: dict[str, Any]) -> bool:
     return any(str(key).upper().startswith(FRIDGE_FIELD_PREFIX) for key in d)
 
 
-def fridge_door_is_open(value: Any) -> Optional[bool]:
-    """Decode an RFDOORA value into a door state.
+def fridge_door_states(value: Any) -> Optional[dict[str, bool]]:
+    """Decode an RFDOORA value into per-door open states.
 
-    Only 00003 (closed) and 00001 (open) have been observed so far; the
-    bit-based rule below reproduces both and is the best guess for any
-    other value. Returns None when the field is missing/unparseable so
-    the binary sensor can report "unknown" instead of "closed".
+    Returns ``{"fridge": bool, "freezer": bool}`` where True means that
+    door is open, or None when the field is missing/unparseable so the
+    binary sensors report "unknown" instead of "closed".
     """
     number = _as_int(value)
     if number is None:
         return None
-    return (number & FRIDGE_DOOR_CLOSED_BIT) == 0
+    return {
+        door: (number & bit) == 0 for door, bit in FRIDGE_DOOR_CLOSED_BITS.items()
+    }
 
 
 def fridge_door_raw(d: dict[str, Any]) -> Any:
@@ -426,10 +432,12 @@ class VestelAcApi:
             # further reverse engineering.
             if is_fridge_payload(d):
                 door_raw = fridge_door_raw(d)
+                states = fridge_door_states(door_raw)
                 status["is_fridge"] = True
                 status["fridge"] = {
                     "door_raw": door_raw,
-                    "door_open": fridge_door_is_open(door_raw),
+                    "fridge_door_open": states["fridge"] if states else None,
+                    "freezer_door_open": states["freezer"] if states else None,
                 }
             return status
 

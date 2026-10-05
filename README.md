@@ -249,11 +249,11 @@ The Vestel Smart Life cloud serves every appliance type through the same endpoin
 
 ### Fridge support (work in progress)
 
-A real Vestel fridge returns a field set that all starts with `RF`, so the integration detects it automatically and creates a proper **door binary sensor** (named `Kapı`) on the fridge device instead of exposing it as an AC:
+A real Vestel fridge returns a field set that all starts with `RF`, so the integration detects it automatically and creates proper **door binary sensors** (`Kapı` for the fridge door, `Dondurucu Kapısı` for the freezer door) on the fridge device instead of exposing it as an AC:
 
 | Field | Meaning | Status |
 | --- | --- | --- |
-| `RFDOORA` | Door state - `00003` closed, `00001` open (confirmed on a live device: the fridge alarmed ~2 min after the door was left open) | **decoded** -> door binary sensor |
+| `RFDOORA` | Door state - a 2-bit field, one bit per door: `00003` (0b11) both closed, `00001` (0b01) fridge door open, `00002` (0b10) freezer door open (confirmed on a live device: the fridge alarmed ~2 min after the fridge door was left open) | **decoded** -> fridge + freezer door binary sensors |
 | `RFTEMSE` | Temperature setpoint / reading (e.g. `00530`) | undecoded - visible as a raw diagnostic sensor |
 | `RFMODEA` | Mode | undecoded |
 | `RFSSAVE` | Eco / super-save | undecoded |
@@ -571,11 +571,11 @@ Vestel Akıllı Yaşam bulutu, tüm cihaz tiplerine aynı uç noktalar üzerinde
 
 ### Buzdolabı desteği (geliştirme aşamasında)
 
-Gerçek bir Vestel buzdolabı, tamamı `RF` ile başlayan bir alan kümesi döndürüyor; entegrasyon bunu otomatik algılıyor ve cihazı klima gibi göstermek yerine üzerinde düzgün bir **kapı binary sensörü** (`Kapı`) oluşturuyor:
+Gerçek bir Vestel buzdolabı, tamamı `RF` ile başlayan bir alan kümesi döndürüyor; entegrasyon bunu otomatik algılıyor ve cihazı klima gibi göstermek yerine üzerinde düzgün **kapı binary sensörleri** (`Kapı` buzdolabı kapağı, `Dondurucu Kapısı` dondurucu kapağı) oluşturuyor:
 
 | Alan | Anlamı | Durum |
 | --- | --- | --- |
-| `RFDOORA` | Kapı durumu - `00003` kapalı, `00001` açık (gerçek cihazda doğrulandı: kapı açık bırakılınca ~2 dk sonra cihaz alarm verdi) | **çözüldü** -> kapı binary sensörü |
+| `RFDOORA` | Kapı durumu - kapı başına bir bitlik 2 bitlik alan: `00003` (0b11) ikisi de kapalı, `00001` (0b01) buzdolabı kapağı açık, `00002` (0b10) dondurucu kapağı açık (gerçek cihazda doğrulandı: buzdolabı kapağı açık bırakılınca ~2 dk sonra cihaz alarm verdi) | **çözüldü** -> buzdolabı + dondurucu kapı binary sensörleri |
 | `RFTEMSE` | Sıcaklık ayarı / okuması (ör. `00530`) | çözülmedi - ham tanı sensörü olarak görünür |
 | `RFMODEA` | Mod | çözülmedi |
 | `RFSSAVE` | Eco / süper tasarruf | çözülmedi |
