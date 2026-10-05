@@ -97,6 +97,29 @@ FRIDGE_DOOR_KEYS = ("RFDOORA", "RFDOORB")
 # (+2/+4/+5 °C cooler against -16..-24 °C freezer), see fridge_temperatures().
 FRIDGE_TEMP_KEYS = ("RFTEMSE",)
 
+# RFMODEA is a bit field of independent fridge modes, reverse engineered on
+# a real Vestel fridge:
+#
+#   00002 (0b00010, bit 1) = fast freeze (hızlı dondurma) on
+#   00004 (0b00100, bit 2) = fast cool   (hızlı soğutma)  on
+#   00006 (bits 1+2)       = fast cool + fast freeze on together
+#   00008 (0b01000, bit 3) = holiday mode (tatil) on
+#   00016 (0b10000, bit 4) = eco mode (ekonomi) on
+#
+# The bits are independent (fast cool and fast freeze can be active at the
+# same time), so every bit is decoded on its own.
+FRIDGE_MODE_KEYS = ("RFMODEA",)
+FRIDGE_MODE_BITS = {
+    "fast_freeze": 0b00010,
+    "fast_cool": 0b00100,
+    "holiday": 0b01000,
+    "eco": 0b10000,
+}
+
+# Two plain on/off flag fields: 00000 = off, anything else = on.
+FRIDGE_CHILD_LOCK_KEYS = ("RFCLOCK",)
+FRIDGE_SCREEN_SAVER_KEYS = ("RFSSAVE",)
+
 
 def _as_int(value: Any) -> Optional[int]:
     """Best-effort decimal parse of a cloud field (values arrive as
@@ -150,6 +173,63 @@ def fridge_door_raw(d: dict[str, Any]) -> Any:
 def fridge_temp_raw(d: dict[str, Any]) -> Any:
     """Return the raw RFTEMSE value, if present."""
     return _first_upper_field(d, FRIDGE_TEMP_KEYS)
+
+
+def fridge_mode_raw(d: dict[str, Any]) -> Any:
+    """Return the raw RFMODEA value, if present."""
+    return _first_upper_field(d, FRIDGE_MODE_KEYS)
+
+
+def fridge_child_lock_raw(d: dict[str, Any]) -> Any:
+    """Return the raw RFCLOCK (child lock) value, if present."""
+    return _first_upper_field(d, FRIDGE_CHILD_LOCK_KEYS)
+
+
+def fridge_screen_saver_raw(d: dict[str, Any]) -> Any:
+    """Return the raw RFSSAVE (screen saver) value, if present."""
+    return _first_upper_field(d, FRIDGE_SCREEN_SAVER_KEYS)
+
+
+def fridge_modes(value: Any) -> Optional[dict[str, bool]]:
+    """Decode an RFMODEA value into the individual mode booleans.
+
+    Returns ``{"fast_freeze": bool, "fast_cool": bool, "holiday": bool,
+    "eco": bool}`` or None when the field is missing/unparseable, so the
+    binary sensors report "unknown" instead of a bogus "off".
+    """
+    number = _as_int(value)
+    if number is None:
+        return None
+    return {name: bool(number & bit) for name, bit in FRIDGE_MODE_BITS.items()}
+
+
+def fridge_flag(value: Any) -> Optional[bool]:
+    """Decode a plain on/off RF flag field such as RFCLOCK or RFSSAVE
+    (``00000`` = off, anything else = on). Returns None when the field is
+    missing/unparseable."""
+    number = _as_int(value)
+    if number is None:
+        return None
+    return number != 0
+
+
+def fridge_temp_display(fridge: dict[str, Any], which: str) -> Any:
+    """The value the fridge panel shows for a decoded setpoint ``which``
+    ("cooler" or "freezer"), honouring the mode overrides:
+
+    * eco on -> the panel shows ``"E"`` instead of a number for **both**
+      the cooler and the freezer;
+    * holiday on -> the cooler is switched off, so the cooler has no
+      reading at all (``None`` turns into "unknown"/"--" in HA), while the
+      freezer keeps its setpoint.
+
+    Pure helper so the display rules stay testable without Home Assistant.
+    """
+    if fridge.get("eco"):
+        return "E"
+    if which == "cooler" and fridge.get("holiday"):
+        return None
+    return fridge.get(f"{which}_temp")
 
 
 def fridge_temperatures(value: Any) -> Optional[dict[str, int]]:
@@ -479,6 +559,10 @@ class VestelAcApi:
                 states = fridge_door_states(door_raw)
                 temp_raw = fridge_temp_raw(d)
                 temps = fridge_temperatures(temp_raw)
+                mode_raw = fridge_mode_raw(d)
+                modes = fridge_modes(mode_raw)
+                child_lock_raw = fridge_child_lock_raw(d)
+                screen_saver_raw = fridge_screen_saver_raw(d)
                 status["is_fridge"] = True
                 status["fridge"] = {
                     "door_raw": door_raw,
@@ -487,6 +571,15 @@ class VestelAcApi:
                     "temp_raw": temp_raw,
                     "cooler_temp": temps["cooler"] if temps else None,
                     "freezer_temp": temps["freezer"] if temps else None,
+                    "mode_raw": mode_raw,
+                    "fast_cool": modes["fast_cool"] if modes else None,
+                    "fast_freeze": modes["fast_freeze"] if modes else None,
+                    "holiday": modes["holiday"] if modes else None,
+                    "eco": modes["eco"] if modes else None,
+                    "child_lock_raw": child_lock_raw,
+                    "child_lock": fridge_flag(child_lock_raw),
+                    "screen_saver_raw": screen_saver_raw,
+                    "screen_saver": fridge_flag(screen_saver_raw),
                 }
             return status
 

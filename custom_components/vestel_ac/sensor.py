@@ -16,6 +16,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import VestelAcCoordinator
+from .api import fridge_temp_display
 from .const import DOMAIN
 
 # Numeric PM2.5 / TVOC fields are not present on every Vestel AC model.
@@ -107,11 +108,11 @@ async def async_setup_entry(
                 [
                     _VestelFridgeTempSensor(
                         coordinator, entry.entry_id, device,
-                        "cooler_temp", "Soğutucu Sıcaklığı", "fridge_cooler_temp",
+                        "cooler", "Soğutucu Sıcaklığı", "fridge_cooler_temp",
                     ),
                     _VestelFridgeTempSensor(
                         coordinator, entry.entry_id, device,
-                        "freezer_temp", "Dondurucu Sıcaklığı", "fridge_freezer_temp",
+                        "freezer", "Dondurucu Sıcaklığı", "fridge_freezer_temp",
                     ),
                 ]
             )
@@ -254,19 +255,30 @@ class _VestelKnownSensor(_VestelBaseSensor):
 
 
 class _VestelFridgeTempSensor(_VestelBaseSensor):
-    """A decoded fridge setpoint in °C (cooler or freezer), from RFTEMSE."""
+    """A decoded fridge setpoint (cooler or freezer), from RFTEMSE.
+
+    Normally the value is a plain °C number. Two modes change what the
+    fridge's own panel shows, and we mirror them:
+
+    * eco mode on -> the panel shows ``E`` for **both** setpoints, so the
+      state becomes the string ``"E"``;
+    * holiday mode on -> the cooler is switched off, so there is no cooler
+      reading at all (``unknown``/``--``) while the freezer keeps its
+      setpoint.
+
+    When the state is not a number the temperature device class, unit and
+    state class are dropped, so Home Assistant never tries to parse ``E``
+    as a temperature.
+    """
 
     # Unlike the raw diagnostic sensors this is a normal reading entity.
     _attr_entity_category = None
-    _attr_device_class = SensorDeviceClass.TEMPERATURE
-    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
-    _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(
-        self, coordinator, entry_id, device, state_key, name, suffix
+        self, coordinator, entry_id, device, which, name, suffix
     ) -> None:
         super().__init__(coordinator, entry_id, device)
-        self._state_key = state_key
+        self._which = which
         self._attr_name = name
         self._attr_unique_id = f"{entry_id}_{device['device_id']}_{suffix}"
 
@@ -277,13 +289,35 @@ class _VestelFridgeTempSensor(_VestelBaseSensor):
         return fridge if isinstance(fridge, dict) else {}
 
     @property
-    def native_value(self) -> int | None:
-        return self._fridge.get(self._state_key)
+    def native_value(self) -> int | str | None:
+        return fridge_temp_display(self._fridge, self._which)
+
+    @property
+    def _is_numeric(self) -> bool:
+        return isinstance(self.native_value, (int, float))
+
+    @property
+    def device_class(self) -> SensorDeviceClass | None:
+        return SensorDeviceClass.TEMPERATURE if self._is_numeric else None
+
+    @property
+    def native_unit_of_measurement(self) -> str | None:
+        return UnitOfTemperature.CELSIUS if self._is_numeric else None
+
+    @property
+    def state_class(self) -> SensorStateClass | None:
+        return SensorStateClass.MEASUREMENT if self._is_numeric else None
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        # Keep the undecoded RFTEMSE value visible next to the decoded °C.
-        return {"ham_deger": self._fridge.get("temp_raw")}
+        # Keep the undecoded RFTEMSE value visible next to the decoded °C,
+        # plus the two mode flags that override what is shown.
+        fridge = self._fridge
+        return {
+            "ham_deger": fridge.get("temp_raw"),
+            "tatil_modu": fridge.get("holiday"),
+            "ekonomi_modu": fridge.get("eco"),
+        }
 
 
 class _VestelAliasSensor(_VestelBaseSensor):

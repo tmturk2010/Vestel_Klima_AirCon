@@ -12,6 +12,9 @@ import pytest
 from custom_components.vestel_ac.api import (
     VestelAcApi,
     fridge_door_states,
+    fridge_flag,
+    fridge_modes,
+    fridge_temp_display,
     fridge_temperatures,
     is_fridge_payload,
 )
@@ -202,6 +205,120 @@ class TestFridgeTemperatures:
         assert status["is_fridge"] is True
         assert status["fridge"]["cooler_temp"] is None
         assert status["fridge"]["fridge_door_open"] is False
+
+
+class TestFridgeModes:
+    """RFMODEA is a bit field of independent modes (reverse engineered on a
+    real fridge), RFCLOCK / RFSSAVE are plain on/off flags."""
+
+    @pytest.mark.parametrize(
+        "raw,expected",
+        (
+            ("00000", {}),
+            ("00002", {"fast_freeze": True}),
+            ("00004", {"fast_cool": True}),
+            ("00006", {"fast_cool": True, "fast_freeze": True}),
+            ("00008", {"holiday": True}),
+            ("00016", {"eco": True}),
+            ("00030", {"fast_freeze": True, "fast_cool": True,
+                       "holiday": True, "eco": True}),
+        ),
+    )
+    def test_mode_bits(self, raw, expected):
+        modes = fridge_modes(raw)
+        assert modes == {
+            "fast_freeze": expected.get("fast_freeze", False),
+            "fast_cool": expected.get("fast_cool", False),
+            "holiday": expected.get("holiday", False),
+            "eco": expected.get("eco", False),
+        }
+
+    def test_modes_accept_ints_and_unpadded_strings(self):
+        assert fridge_modes("8") == {
+            "fast_freeze": False, "fast_cool": False,
+            "holiday": True, "eco": False,
+        }
+        assert fridge_modes(16)["eco"] is True
+
+    def test_unknown_and_malformed_modes_are_none(self):
+        assert fridge_modes(None) is None
+        assert fridge_modes("--") is None
+        assert fridge_modes("not-a-number") is None
+
+    def test_flags(self):
+        assert fridge_flag("00000") is False
+        assert fridge_flag("00001") is True
+        assert fridge_flag("1") is True
+        assert fridge_flag(None) is None
+        assert fridge_flag("--") is None
+
+    def test_modes_and_flags_flow_through_parse_status(self):
+        status = VestelAcApi._parse_status(
+            _fridge_payload(RFMODEA="00030", RFCLOCK="00001", RFSSAVE="00001")
+        )
+        fridge = status["fridge"]
+        assert fridge["mode_raw"] == "00030"
+        assert fridge["fast_cool"] is True
+        assert fridge["fast_freeze"] is True
+        assert fridge["holiday"] is True
+        assert fridge["eco"] is True
+        assert fridge["child_lock"] is True
+        assert fridge["child_lock_raw"] == "00001"
+        assert fridge["screen_saver"] is True
+        assert fridge["screen_saver_raw"] == "00001"
+
+    def test_default_fixture_has_everything_off(self):
+        # The captured fixture ships RFMODEA/RFCLOCK/RFSSAVE = 00000.
+        fridge = VestelAcApi._parse_status(_fridge_payload())["fridge"]
+        assert fridge["fast_cool"] is False
+        assert fridge["fast_freeze"] is False
+        assert fridge["holiday"] is False
+        assert fridge["eco"] is False
+        assert fridge["child_lock"] is False
+        assert fridge["screen_saver"] is False
+
+    def test_missing_mode_field_is_unknown(self):
+        payload = _fridge_payload()
+        del payload["RFMODEA"]
+        del payload["RFCLOCK"]
+        fridge = VestelAcApi._parse_status(payload)["fridge"]
+        assert fridge["holiday"] is None
+        assert fridge["eco"] is None
+        assert fridge["child_lock"] is None
+        # The door/temperature decode is unaffected.
+        assert fridge["fridge_door_open"] is False
+        assert fridge["cooler_temp"] == 2
+
+
+class TestFridgeTempDisplay:
+    """What the panel shows: eco -> "E" for both, holiday -> no cooler."""
+
+    def test_normal_shows_setpoints(self):
+        fridge = VestelAcApi._parse_status(_fridge_payload())["fridge"]
+        assert fridge_temp_display(fridge, "cooler") == 2
+        assert fridge_temp_display(fridge, "freezer") == -18
+
+    def test_eco_shows_e_for_both(self):
+        fridge = VestelAcApi._parse_status(_fridge_payload(RFMODEA="00016"))["fridge"]
+        assert fridge_temp_display(fridge, "cooler") == "E"
+        assert fridge_temp_display(fridge, "freezer") == "E"
+
+    def test_holiday_hides_cooler_but_keeps_freezer(self):
+        fridge = VestelAcApi._parse_status(_fridge_payload(RFMODEA="00008"))["fridge"]
+        assert fridge_temp_display(fridge, "cooler") is None
+        assert fridge_temp_display(fridge, "freezer") == -18
+
+    def test_eco_wins_over_holiday(self):
+        fridge = VestelAcApi._parse_status(_fridge_payload(RFMODEA="00024"))["fridge"]
+        assert fridge_temp_display(fridge, "cooler") == "E"
+        assert fridge_temp_display(fridge, "freezer") == "E"
+
+    def test_numeric_setpoints_stay_available(self):
+        # The overrides are display-only: the decoded numbers remain in the
+        # status dict for automation.
+        fridge = VestelAcApi._parse_status(_fridge_payload(RFMODEA="00016"))["fridge"]
+        assert fridge["cooler_temp"] == 2
+        assert fridge["freezer_temp"] == -18
 
 
 class TestFridgePayloads:

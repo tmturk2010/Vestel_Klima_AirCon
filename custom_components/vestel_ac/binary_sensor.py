@@ -1,10 +1,10 @@
 """Binary sensors for Vestel appliances that are not air conditioners.
 
-Right now this is the fridge door(s), decoded from ``RFDOORA``. The value
-semantics were reverse engineered from a real device: ``00003`` with both
-doors closed, ``00001`` while the fridge door was open and ``00002`` while
-the freezer door was open. See ``api.fridge_door_states`` for the decode
-rule and how to extend it once more states show up.
+Right now this is the fridge: the two doors decoded from ``RFDOORA`` plus
+the modes decoded from ``RFMODEA`` and the two plain flags ``RFCLOCK``
+(child lock) and ``RFSSAVE`` (screen saver). Everything here is read-only:
+the fridge command format is still undocumented, so the integration cannot
+toggle them (see the README for the reverse-engineering workflow).
 """
 from __future__ import annotations
 
@@ -23,10 +23,23 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from . import VestelAcCoordinator, filter_fridge_devices
 from .const import DOMAIN
 
-# (unique_id suffix, entity name, key in the decoded status dict)
+# (unique_id suffix, entity name, key in the decoded status["fridge"] dict)
+# Both doors are named explicitly so it is obvious which door is which.
 _DOORS = (
-    ("fridge_door", "Kapı", "fridge_door_open"),
+    ("fridge_door", "Soğutucu Kapısı", "fridge_door_open"),
     ("freezer_door", "Dondurucu Kapısı", "freezer_door_open"),
+)
+
+# Read-only fridge flags/modes: (suffix, name, state key, raw key).
+# RFMODEA is a bit field (holiday / eco / fast cool / fast freeze), while
+# RFCLOCK and RFSSAVE are plain on/off fields.
+_FLAGS = (
+    ("fridge_fast_cool", "Hızlı Soğutma", "fast_cool", "mode_raw"),
+    ("fridge_fast_freeze", "Hızlı Dondurma", "fast_freeze", "mode_raw"),
+    ("fridge_holiday", "Tatil Modu", "holiday", "mode_raw"),
+    ("fridge_eco", "Ekonomi Modu", "eco", "mode_raw"),
+    ("fridge_child_lock", "Çocuk Kilidi", "child_lock", "child_lock_raw"),
+    ("fridge_screen_saver", "Ekran Koruyucu", "screen_saver", "screen_saver_raw"),
 )
 
 
@@ -41,22 +54,37 @@ async def async_setup_entry(
     # Fridges carry the RF* fields; an AC never does. Gating on the fridge
     # filter keeps this platform inert for accounts with only air
     # conditioners.
-    entities: list[BinarySensorEntity] = [
-        _VestelFridgeDoorSensor(coordinator, entry.entry_id, device, suffix, name, key)
-        for device in filter_fridge_devices(stored)
-        for suffix, name, key in _DOORS
-    ]
+    entities: list[BinarySensorEntity] = []
+    for device in filter_fridge_devices(stored):
+        for suffix, name, key in _DOORS:
+            entities.append(
+                _VestelFridgeBinarySensor(
+                    coordinator, entry.entry_id, device, suffix, name, key,
+                    raw_key="door_raw", device_class=BinarySensorDeviceClass.DOOR,
+                )
+            )
+        for suffix, name, key, raw_key in _FLAGS:
+            entities.append(
+                _VestelFridgeBinarySensor(
+                    coordinator, entry.entry_id, device, suffix, name, key,
+                    raw_key=raw_key,
+                )
+            )
 
     async_add_entities(entities)
 
 
-class _VestelFridgeDoorSensor(
+class _VestelFridgeBinarySensor(
     CoordinatorEntity[VestelAcCoordinator], BinarySensorEntity
 ):
-    """One door of a Vestel fridge (open when its RFDOORA bit is clear)."""
+    """One decoded fridge boolean (a door, or a mode/flag).
+
+    ``state_key`` points into the decoded ``status["fridge"]`` dict, so a
+    missing/unparseable field yields ``None`` -> "unknown" in HA rather
+    than a wrong "off".
+    """
 
     _attr_has_entity_name = True
-    _attr_device_class = BinarySensorDeviceClass.DOOR
 
     def __init__(
         self,
@@ -66,11 +94,15 @@ class _VestelFridgeDoorSensor(
         suffix: str,
         name: str,
         state_key: str,
+        raw_key: str,
+        device_class: BinarySensorDeviceClass | None = None,
     ) -> None:
         super().__init__(coordinator)
         self._device_id = device["device_id"]
         self._state_key = state_key
+        self._raw_key = raw_key
         self._attr_name = name
+        self._attr_device_class = device_class
         self._attr_unique_id = f"{entry_id}_{self._device_id}_{suffix}"
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, self._device_id)},
@@ -92,6 +124,6 @@ class _VestelFridgeDoorSensor(
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        # Keep the undecoded value visible so further states (once more of
+        # Keep the raw cloud value visible so further states (once more of
         # them are observed) can be interpreted without guessing.
-        return {"ham_deger": self._fridge.get("door_raw")}
+        return {"ham_deger": self._fridge.get(self._raw_key)}
